@@ -43,6 +43,18 @@ def make_norm(config):
         return RMSNorm(config.n_embd)
     return LayerNorm(config.n_embd, bias=config.bias)
 
+def apply_rope(x):
+    """Apply rope in original form"""
+    B, nh, T, hs = x.size()  # batch size, number of heads, sequence length, head size
+    m = torch.arange(T, device=x.device).float()  # (T)
+    i = torch.arange(hs // 2, device=x.device).float()  # (hs/2)
+    theta = 10000 ** (-2 * i / hs)  # speed
+    angle = torch.outer(m, theta)  # (T, hs/2)
+    cos, sin = angle.cos(), angle.sin() 
+    a, b = x[..., ::2], x[..., 1::2] 
+    return torch.stack([a * cos - b * sin, a * sin + b * cos], dim=-1).flatten(-2).type_as(x)
+
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -58,6 +70,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.rope = config.pos == 'rope'
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -74,6 +87,9 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        if self.rope:
+            q, k = apply_rope(q), apply_rope(k)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -155,6 +171,7 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     norm: str = 'layernorm' # 'layernorm' or 'rmsnorm'
     mlp: str = 'gelu' # 'gelu' or 'swiglu'
+    pos: str = 'learned' # 'learned', 'nope', 'rope'
 
 class GPT(nn.Module):
 
@@ -215,9 +232,14 @@ class GPT(nn.Module):
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        # tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        # pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        # x = self.transformer.drop(tok_emb + pos_emb)
+        x = self.transformer.wte(idx)
+        if self.config.pos == 'learned':
+            x = x + self.transformer.wpe(pos)
+        x = self.transformer.drop(x)
+        
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
