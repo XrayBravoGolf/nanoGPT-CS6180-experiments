@@ -61,7 +61,14 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        assert config.n_head % config.group_size == 0
+        self.group_size = config.group_size
+        self.n_kv_head = config.n_head // config.group_size # 6 // 2 = 3
+        self.head_size = config.n_embd // config.n_head # 384 // 6 = 64
+        self.kv_dim = self.n_kv_head * self.head_size #3 * 64 = 192
+        self.c_attn = nn.Linear(config.n_embd, config.n_embd + 2 * self.kv_dim, bias=config.bias) #Q + K +V
+
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
@@ -83,13 +90,21 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        # k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q, k, v = self.c_attn(x).split([self.n_embd, self.kv_dim, self.kv_dim], dim=2)
+        q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_kv_head, self.head_size).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_kv_head, self.head_size).transpose(1, 2) # (B, n_kv, T, hs)
 
         if self.rope:
             q, k = apply_rope(q), apply_rope(k)
+
+        #share kv head across group_size query heads or enable_gqa=True
+        k = k.repeat_interleave(self.group_size, dim=1) # (B, nh, T, hs)
+        v = v.repeat_interleave(self.group_size, dim=1) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -172,6 +187,7 @@ class GPTConfig:
     norm: str = 'layernorm' # 'layernorm' or 'rmsnorm'
     mlp: str = 'gelu' # 'gelu' or 'swiglu'
     pos: str = 'learned' # 'learned', 'nope', 'rope'
+    group_size: int = 1 # query heads per K/V group
 
 class GPT(nn.Module):
 
@@ -239,7 +255,7 @@ class GPT(nn.Module):
         if self.config.pos == 'learned':
             x = x + self.transformer.wpe(pos)
         x = self.transformer.drop(x)
-        
+
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)

@@ -36,6 +36,7 @@ out_dir = 'out'
 norm = 'layernorm'
 mlp = 'gelu'
 pos = 'learned'
+group_size = 1
 eval_interval = 2000
 log_interval = 1
 eval_iters = 200
@@ -148,7 +149,7 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, norm=norm, mlp=mlp, pos=pos) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, norm=norm, mlp=mlp, pos=pos, group_size=group_size) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
