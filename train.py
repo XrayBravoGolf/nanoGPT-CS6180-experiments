@@ -33,6 +33,7 @@ from model import GPTConfig, GPT
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
+norm = 'layernorm'
 eval_interval = 2000
 log_interval = 1
 eval_iters = 200
@@ -145,7 +146,7 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, norm=norm) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -165,6 +166,7 @@ elif init_from == 'resume':
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
+    model_args['norm'] = checkpoint_model_args.get('norm', 'layernorm') # older checkpoints predate this field
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -185,6 +187,9 @@ elif init_from.startswith('gpt2'):
     model = GPT.from_pretrained(init_from, override_args)
     # read off the created config params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+        model_args[k] = checkpoint_model_args[k]
+    model_args['norm'] = checkpoint_model_args.get('norm', 'layernorm') # older checkpoints predate this field
+    for _ in ():
         model_args[k] = getattr(model.config, k)
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:

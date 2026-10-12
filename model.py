@@ -26,6 +26,23 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+class RMSNorm(nn.Module):
+    """ Root Mean Square Layer Normalization """
+
+    def __init__(self, ndim):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+
+    def forward(self, input):
+        #return F.rms_norm(input, self.weight.shape, self.weight, 1e-6)
+        inv_rms = torch.rsqrt(input.pow(2).mean(-1, keepdim=True) + 1e-6)
+        return input * inv_rms * self.weight
+
+def make_norm(config):
+    if config.norm == 'rmsnorm':
+        return RMSNorm(config.n_embd)
+    return LayerNorm(config.n_embd, bias=config.bias)
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -74,7 +91,7 @@ class CausalSelfAttention(nn.Module):
         # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
-
+    
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -95,9 +112,9 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = make_norm(config)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = make_norm(config)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -114,6 +131,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    norm: str = 'layernorm' # 'layernorm' or 'rmsnorm'
 
 class GPT(nn.Module):
 
@@ -128,7 +146,7 @@ class GPT(nn.Module):
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ln_f = make_norm(config),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
