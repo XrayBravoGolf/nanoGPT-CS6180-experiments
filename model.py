@@ -108,6 +108,27 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
+class MLP_SwiGLU(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        hidden = int(8 * config.n_embd / 3)
+        self.c_gate = nn.Linear(config.n_embd, hidden, bias=config.bias)
+        self.c_fc = nn.Linear(config.n_embd, hidden, bias=config.bias)
+        self.c_proj = nn.Linear(hidden, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x):
+        x = F.silu(self.c_gate(x)) * self.c_fc(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
+
+def make_mlp(config):
+    if config.mlp == 'swiglu':
+        return MLP_SwiGLU(config)
+    return MLP(config)
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -115,7 +136,8 @@ class Block(nn.Module):
         self.ln_1 = make_norm(config)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = make_norm(config)
-        self.mlp = MLP(config)
+        self.mlp = make_mlp(config)
+
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -132,6 +154,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     norm: str = 'layernorm' # 'layernorm' or 'rmsnorm'
+    mlp: str = 'gelu' # 'gelu' or 'swiglu'
 
 class GPT(nn.Module):
 
